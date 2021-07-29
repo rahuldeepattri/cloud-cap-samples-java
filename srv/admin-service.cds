@@ -1,19 +1,24 @@
 using {sap.common.Languages as CommonLanguages} from '@sap/cds/common';
-using {my.bookshop as my} from '../db/index';
+using {
+  my.bookshop as my,
+  ic
+} from '../db/index';
 
 @path : 'admin'
 service AdminService @(requires : 'admin') {
-  entity Books   as projection on my.Books actions {
+  entity Books    as projection on my.Books actions {
     action addToOrder(order_ID : UUID, amount : Integer) returns Orders;
   }
 
-  entity Authors as projection on my.Authors;
-  entity Orders  as select from my.Orders;
+  entity Authors  as projection on my.Authors;
+  entity Orders   as select from my.Orders;
 
   @cds.persistence.skip
   entity Upload @odata.singleton {
     csv : LargeBinary @Core.MediaType : 'text/csv';
   }
+
+  entity Products as projection on ic.Products actions {}
 }
 
 // Deep Search Items
@@ -29,9 +34,15 @@ annotate AdminService.Books with @cds.search : {
   title
 };
 
+annotate AdminService.Products with @cds.search : {
+  descr,
+  title
+};
+
 // Enable Fiori Draft for Orders
 annotate AdminService.Orders with @odata.draft.enabled;
 annotate AdminService.Books with @odata.draft.enabled;
+annotate AdminService.Products with @odata.draft.enabled;
 
 // workaround to enable the value help for languages
 // Necessary because auto exposure is currently not working

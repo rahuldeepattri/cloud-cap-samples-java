@@ -35,9 +35,14 @@ import org.springframework.stereotype.Component;
 import cds.gen.catalogservice.AddReviewContext;
 import cds.gen.catalogservice.Books;
 import cds.gen.catalogservice.Books_;
+import cds.gen.catalogservice.AddProductReviewContext;
+import cds.gen.catalogservice.Products;
+import cds.gen.catalogservice.Products_;
 import cds.gen.catalogservice.CatalogService_;
 import cds.gen.catalogservice.Reviews;
 import cds.gen.catalogservice.Reviews_;
+import cds.gen.catalogservice.ProductReviews;
+import cds.gen.catalogservice.ProductReviews_;
 import cds.gen.catalogservice.SubmitOrderContext;
 import cds.gen.reviewservice.ReviewService_;
 import my.bookshop.MessageKeys;
@@ -95,6 +100,25 @@ class CatalogServiceHandler implements EventHandler {
 	}
 
 	/**
+	 * Invokes some validations before creating a product review.
+	 *
+	 * @param context {@link ReviewContext}
+	 */
+	@Before(entity = Products_.CDS_NAME)
+	public void beforeAddProductReview(AddProductReviewContext context) {
+		String user = context.getUserInfo().getName();
+		String productId = (String) analyzer.analyze(context.getCqn()).targetKeys().get(Products.ID);
+
+		Result result = db.run(Select.from(CatalogService_.PRODUCT_REVIEWS)
+				.where(review -> review.product_ID().eq(productId).and(review.createdBy().eq(user))));
+
+		if (result.first().isPresent()) {
+			throw new ServiceException(ErrorStatuses.METHOD_NOT_ALLOWED, MessageKeys.REVIEW_ADD_FORBIDDEN)
+					.messageTarget(Reviews_.class, r -> r.createdBy());
+		}
+	}
+
+	/**
 	 * Handles the review creation from the given context.
 	 *
 	 * @param context {@link ReviewContext}
@@ -120,7 +144,45 @@ class CatalogServiceHandler implements EventHandler {
 
 		context.setResult(Struct.access(inserted).as(Reviews.class));
 	}
+	/**
+	 * Handles the review creation from the given context.
+	 *
+	 * @param context {@link ReviewContext}
+	 */
 
+	@On(entity = Products_.CDS_NAME)
+	public void onAddProductReview(AddProductReviewContext context) {
+		Integer rating = context.getRating();
+		String title = context.getTitle();
+		String text = context.getText();
+
+		String productId = (String) analyzer.analyze(context.getCqn()).targetKeys().get(Products.ID);
+
+		cds.gen.reviewservice.ProductReviews review = cds.gen.reviewservice.ProductReviews.create();
+		review.setProductId(productId);
+		review.setRating(rating);
+		review.setTitle(title);
+		review.setText(text);
+
+		Result res = reviewService.run(Insert.into(ReviewService_.PRODUCT_REVIEWS).entry(review));
+		cds.gen.reviewservice.ProductReviews inserted = res.single(cds.gen.reviewservice.ProductReviews.class);
+
+		messages.success(MessageKeys.REVIEW_ADDED);
+
+		context.setResult(Struct.access(inserted).as(ProductReviews.class));
+	}
+
+	/**
+	 * Recalculates and sets the Product rating after a new review for the given Product.
+	 *
+	 * @param context {@link ProductReviewContext}
+	 */
+	@After(entity = Products_.CDS_NAME)
+	public void afterAddProductReview(AddProductReviewContext context) {
+		ratingCalculator.setBookRating(context.getResult().getProductId());
+	}
+
+	
 	/**
 	 * Recalculates and sets the book rating after a new review for the given book.
 	 *
@@ -158,6 +220,29 @@ class CatalogServiceHandler implements EventHandler {
 		for (Books book : books) {
 			if (reviewedBooks.contains(book.getId())) {
 				book.setIsReviewable(false);
+			}
+		}
+	}
+
+	@After
+	public void setIsProductReviewable(CdsReadEventContext context, List<Products> products) {
+		String user = context.getUserInfo().getName();
+		List<String> productIds = products.stream().filter(b -> b.getId() != null).map(b -> b.getId())
+				.collect(Collectors.toList());
+
+		if (productIds.isEmpty()) {
+			return;
+		}
+
+		CqnSelect query = Select.from(CatalogService_.PRODUCTS, b -> b.filter(b.ID().in(productIds)).reviews())
+				.where(r -> r.createdBy().eq(user));
+
+		Set<String> reviewedProducts = db.run(query).streamOf(ProductReviews.class).map(ProductReviews::getProductId)
+				.collect(Collectors.toSet());
+
+		for (Products product : products) {
+			if (reviewedProducts.contains(product.getId())) {
+				product.setIsReviewable(false);
 			}
 		}
 	}
